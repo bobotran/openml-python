@@ -428,7 +428,10 @@ def get_dataset(
 
         arff_file = _get_dataset_arff(description) if download_data else None
         if "oml:minio_url" in description and download_data:
-            parquet_file = _get_dataset_parquet(description)
+            try:
+                parquet_file = _get_dataset_parquet(description)
+            except urllib3.exceptions.MaxRetryError:
+                parquet_file = None
         else:
             parquet_file = None
         remove_dataset_cache = False
@@ -469,11 +472,17 @@ def attributes_arff_from_df(df):
         logger.warning("Converting non-str column names to str.")
         df.columns = [str(column_name) for column_name in df.columns]
 
+    import sortinghat.pylib as pl
+
+    dataFeaturized = pl.FeaturizeFile(df)
+    dataFeaturized1 = pl.FeatureExtraction(dataFeaturized)
+    y_RF = pl.Load_RF(dataFeaturized1) # Prediction
+    import pdb; pdb.set_trace()
     for column_name in df:
         # skipna=True does not infer properly the dtype. The NA values are
         # dropped before the inference instead.
         column_dtype = pd.api.types.infer_dtype(df[column_name].dropna(), skipna=False)
-
+        
         if column_dtype == "categorical":
             # for categorical feature, arff expects a list string. However, a
             # categorical column can contain mixed type and should therefore
@@ -1000,8 +1009,7 @@ def _get_dataset_parquet(
             openml._api_calls._download_minio_file(
                 source=cast(str, url), destination=output_file_path
             )
-        except (FileNotFoundError, urllib3.exceptions.MaxRetryError) as e:
-            logger.warning("Could not download file from %s: %s" % (cast(str, url), e))
+        except FileNotFoundError:
             return None
     return output_file_path
 
