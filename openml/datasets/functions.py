@@ -26,6 +26,7 @@ from ..utils import (
     _remove_cache_dir_for_id,
     _create_cache_directory_for_id,
 )
+from .sortinghatlib import pylib as sortinghat
 
 
 DATASETS_CACHE_DIR_NAME = "datasets"
@@ -468,26 +469,48 @@ def attributes_arff_from_df(df):
     PD_DTYPES_TO_ARFF_DTYPE = {"integer": "INTEGER", "floating": "REAL", "string": "STRING"}
     attributes_arff = []
 
-    if not all([isinstance(column_name, str) for column_name in df.columns]):
-        logger.warning("Converting non-str column names to str.")
-        df.columns = [str(column_name) for column_name in df.columns]
+    # if not all([isinstance(column_name, str) for column_name in df.columns]):
+    #     logger.warning("Converting non-str column names to str.")
+    #     df.columns = [str(column_name) for column_name in df.columns]
 
-    import sortinghat.pylib as pl
+    sortinghat_class_map = {
+        0: 'numeric',
+        1: 'categorical',
+        2: 'datetime',
+        3: 'sentence',
+        4: 'url',
+        5: 'embedded-number',
+        6: 'list',
+        7: 'not-generalizable',
+        8: 'context-specific'
+    }
 
-    dataFeaturized = pl.FeaturizeFile(df)
-    dataFeaturized1 = pl.FeatureExtraction(dataFeaturized)
-    y_RF = pl.Load_RF(dataFeaturized1) # Prediction
-    import pdb; pdb.set_trace()
     for column_name in df:
-        # skipna=True does not infer properly the dtype. The NA values are
-        # dropped before the inference instead.
-        column_dtype = pd.api.types.infer_dtype(df[column_name].dropna(), skipna=False)
-        
+        dataFeaturized = sortinghat.FeaturizeFile(df[[column_name]])
+        dataFeaturized1 = sortinghat.FeatureExtraction(dataFeaturized)
+        y_RF = sortinghat.Load_RF(dataFeaturized1) # Prediction
+        column_dtype = sortinghat_class_map[y_RF[0]]
+
+        # Map Sortinghat feature types to arff
+        if column_dtype == 'numeric':
+            if pd.api.types.is_integer_dtype(df[column_name]):
+                column_dtype = 'integer'
+            else:
+                column_dtype = 'floating'
+        elif column_dtype in ('sentence', 'url', 'embedded-number', 'list', 'context-specific'):
+            column_dtype = 'string'
+        elif column_dtype == 'not-generalizable':
+            column_dtype = 'string'
+            logger.warn("The column {} was detected to contain values" 
+                        "not generalizable for inference.".format(column_name)
+            )
+
+        # Output in arff format
         if column_dtype == "categorical":
             # for categorical feature, arff expects a list string. However, a
             # categorical column can contain mixed type and should therefore
             # raise an error asking to convert all entries to string.
-            categories = df[column_name].cat.categories
+            categories = df[column_name].astype('category').cat.categories
             categories_dtype = pd.api.types.infer_dtype(categories)
             if categories_dtype not in ("string", "unicode"):
                 raise ValueError(
@@ -498,9 +521,6 @@ def attributes_arff_from_df(df):
                     "Got {} dtype in this column.".format(column_name, categories_dtype)
                 )
             attributes_arff.append((column_name, categories.tolist()))
-        elif column_dtype == "boolean":
-            # boolean are encoded as categorical.
-            attributes_arff.append((column_name, ["True", "False"]))
         elif column_dtype in PD_DTYPES_TO_ARFF_DTYPE.keys():
             attributes_arff.append((column_name, PD_DTYPES_TO_ARFF_DTYPE[column_dtype]))
         else:
